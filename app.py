@@ -7,11 +7,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from gensim.models import KeyedVectors
-from keras.preprocessing.text import Tokenizer
+import gensim.downloader as api
+from tensorflow.keras.preprocessing.text import Tokenizer
 
 import tensorflow as tf
-#from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Embedding, GRU, Dense, Dropout
@@ -26,22 +25,25 @@ EMBEDDING_TRAINABLE = False
 TEST_SIZE = 0.2
 RANDOM_STATE = 42
 
-# Paths
-DATASET_CSV_PRIMARY = os.path.join("./datasets", "IMDB-Dataset.csv")
-# DATASET_CSV_FALLBACK = os.path.join("./datasets", "IMDB-Dataset-backup.csv")
-W2V_BIN = os.path.join("./datasets/word2vec", "GoogleNews-vectors-negative300.bin")
+# Paths / model config
+DATASET_CSV = os.path.join("./datasets", "imdb-dataset.csv")
+
+# Preferred online Word2Vec model and fallbacks
+W2V_MODEL_NAME = 'word2vec-google-news-300'
+ALTERNATIVE_MODELS = [
+    'glove-wiki-gigaword-100',
+    'glove-twitter-25',
+]
 
 # -----------------------------
 # Utilities
 # -----------------------------
 
 def resolve_dataset_path() -> str:
-    if os.path.exists(DATASET_CSV_PRIMARY):
-        return DATASET_CSV_PRIMARY
-    if os.path.exists(DATASET_CSV_FALLBACK):
-        return DATASET_CSV_FALLBACK
+    if os.path.exists(DATASET_CSV):
+        return DATASET_CSV
     raise FileNotFoundError(
-        f"Could not find dataset. Expected at '{DATASET_CSV_PRIMARY}' or '{DATASET_CSV_FALLBACK}'."
+        f"Dataset CSV not found at: {DATASET_CSV}"
     )
 
 
@@ -88,12 +90,19 @@ def build_model(vocab_size: int, embedding_dim: int, embedding_matrix: np.ndarra
 
 
 @st.cache_resource(show_spinner=False)
-def load_w2v(bin_path: str) -> KeyedVectors:
-    if not os.path.exists(bin_path):
-        raise FileNotFoundError(
-            f"Word2Vec binary not found at: {bin_path}. Place GoogleNews-vectors-negative300.bin under ./datasets/word2vec/."
-        )
-    return KeyedVectors.load_word2vec_format(bin_path, binary=True)
+def load_w2v_online(model_name: str, alternatives: list):
+    """Load embeddings from gensim hub with fallbacks. Returns (w2v, embedding_dim, used_model)."""
+    try:
+        w2v = api.load(model_name)
+        return w2v, int(getattr(w2v, 'vector_size', EMBEDDING_DIM)), model_name
+    except Exception:
+        for alt in alternatives:
+            try:
+                w2v = api.load(alt)
+                return w2v, int(getattr(w2v, 'vector_size', EMBEDDING_DIM)), alt
+            except Exception:
+                continue
+        raise RuntimeError(f"Failed to load any Word2Vec model. Tried: {[model_name] + alternatives}")
 
 
 @st.cache_resource(show_spinner=False)
@@ -103,10 +112,10 @@ def fit_tokenizer(texts: pd.Series, vocab_size: int) -> Tokenizer:
     return tok
 
 
-def build_embedding_matrix(tokenizer: Tokenizer, w2v: KeyedVectors, vocab_cap: int) -> Tuple[np.ndarray, int, int]:
+def build_embedding_matrix(tokenizer: Tokenizer, w2v, vocab_cap: int, embedding_dim: int) -> Tuple[np.ndarray, int, int]:
     word_index = tokenizer.word_index
     vocab_size_effective = min(vocab_cap, len(word_index) + 1)
-    embedding_matrix = np.zeros((vocab_size_effective, EMBEDDING_DIM), dtype=np.float32)
+    embedding_matrix = np.zeros((vocab_size_effective, embedding_dim), dtype=np.float32)
     not_found = 0
     for word, idx in word_index.items():
         if idx >= vocab_size_effective:
@@ -163,15 +172,16 @@ tokenizer = fit_tokenizer(df_use["review"], VOCAB_SIZE)
 X_all = prepare_features(tokenizer, df_use["review"])  # features for train/test split
 y_all = df_use["sentiment"].to_numpy().astype(np.int32)
 
-# Load W2V and build embedding matrix
-with st.spinner("Loading Word2Vec (first time may take a minute)..."):
-    w2v = load_w2v(W2V_BIN)
-embedding_matrix, vocab_size_eff, not_found = build_embedding_matrix(tokenizer, w2v, VOCAB_SIZE)
+# Load W2V online and build embedding matrix
+with st.spinner("Loading Word2Vec from gensim (first time may take a while)..."):
+    w2v, embedding_dim, used_model = load_w2v_online(W2V_MODEL_NAME, ALTERNATIVE_MODELS)
+embedding_matrix, vocab_size_eff, not_found = build_embedding_matrix(tokenizer, w2v, VOCAB_SIZE, embedding_dim)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Samples", f"{len(df_use):,}")
 col2.metric("Vocab (effective)", f"{vocab_size_eff:,}")
-col3.metric("OOV (within cap)", f"{not_found:,}")
+col3.metric("Embedding dim", f"{embedding_dim}")
+st.caption(f"Using embedding model: {used_model}")
 
 # Train button
 if "model" not in st.session_state:
@@ -189,7 +199,7 @@ if train_clicked:
         X_all, y_all, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y_all
     )
 
-    model = build_model(vocab_size_eff, EMBEDDING_DIM, embedding_matrix)
+    model = build_model(vocab_size_eff, embedding_dim, embedding_matrix)
 
     with st.spinner("Training model..."):
         history = model.fit(
@@ -231,5 +241,5 @@ if colp1.button("Predict"):
         colp2.success(f"Prediction: {label} (Prob(positive)={prob:.3f})")
 
 st.caption(
-    "Run locally: `streamlit run app.py`. Ensure the dataset and GoogleNews Word2Vec binary exist under the ./datasets folder."
+    "Run locally: `streamlit run app.py`. The embeddings are downloaded automatically from gensim on first run. Ensure the dataset CSV exists under ./datasets."
 )

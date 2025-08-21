@@ -2,18 +2,12 @@
 # Install with: pip install -r requirements.txt
 
 # Core ML libraries
-tensorflow>=2.8.0
-scikit-learn>=1.1.0
-numpy>=1.21.0
-pandas>=1.3.0
 
-# Word2Vec and text processing
-gensim>=4.2.0
-
-# Optional: for better performance
-# tensorflow-gpu>=2.8.0  # If you have GPU support
-
-# Development and testing (optional)
-# jupyter>=1.0.0
-# matplotlib>=3.5.0
-# seaborn>=0.11.0
+tensorflow==2.15.0
+keras==2.15.0
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.3.2
+gensim==4.3.2
+scipy==1.11.4
+streamlit==1.36.0
