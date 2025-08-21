@@ -28,11 +28,10 @@ RANDOM_STATE = 42
 # Paths / model config
 DATASET_CSV = os.path.join("./datasets", "imdb-dataset.csv")
 
-# Preferred online Word2Vec model and fallbacks
-W2V_MODEL_NAME = 'word2vec-google-news-300'
+# Preferred online embedding model and fallbacks (Cloud-friendly defaults)
+W2V_MODEL_NAME = 'glove-twitter-25'
 ALTERNATIVE_MODELS = [
     'glove-wiki-gigaword-100',
-    'glove-twitter-25',
 ]
 
 # -----------------------------
@@ -147,6 +146,12 @@ with st.sidebar:
     sample_limit = st.number_input(
         "Training sample limit (0 = full dataset)", min_value=0, max_value=50000, value=2000, step=500
     )
+    embed_model = st.selectbox(
+        "Embedding model",
+        options=["glove-twitter-25", "glove-wiki-gigaword-100"],
+        index=0,
+        help="Smaller models load faster and are recommended on Streamlit Cloud.",
+    )
     st.caption("Tip: use a small subset first to verify the setup, then train on full data.")
 
 # Load & clean dataset
@@ -171,17 +176,13 @@ else:
 tokenizer = fit_tokenizer(df_use["review"], VOCAB_SIZE)
 X_all = prepare_features(tokenizer, df_use["review"])  # features for train/test split
 y_all = df_use["sentiment"].to_numpy().astype(np.int32)
-
-# Load W2V online and build embedding matrix
-with st.spinner("Loading Word2Vec from gensim (first time may take a while)..."):
-    w2v, embedding_dim, used_model = load_w2v_online(W2V_MODEL_NAME, ALTERNATIVE_MODELS)
-embedding_matrix, vocab_size_eff, not_found = build_embedding_matrix(tokenizer, w2v, VOCAB_SIZE, embedding_dim)
+vocab_size_eff = min(VOCAB_SIZE, len(tokenizer.word_index) + 1)
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Samples", f"{len(df_use):,}")
 col2.metric("Vocab (effective)", f"{vocab_size_eff:,}")
-col3.metric("Embedding dim", f"{embedding_dim}")
-st.caption(f"Using embedding model: {used_model}")
+col3.metric("Embedding dim", "-")
+st.caption(f"Selected embedding model: {embed_model} (will load on Train)")
 
 # Train button
 if "model" not in st.session_state:
@@ -198,6 +199,14 @@ if train_clicked:
     X_train, X_test, y_train, y_test = train_test_split(
         X_all, y_all, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y_all
     )
+    # Load embeddings only when training (avoids large downloads at startup)
+    try:
+        with st.spinner("Loading embeddings (first time may take a while)..."):
+            w2v, embedding_dim, used_model = load_w2v_online(embed_model, ALTERNATIVE_MODELS)
+        embedding_matrix, vocab_size_eff, not_found = build_embedding_matrix(tokenizer, w2v, VOCAB_SIZE, embedding_dim)
+    except Exception as e:
+        st.error(f"Failed to load embeddings: {e}")
+        st.stop()
 
     model = build_model(vocab_size_eff, embedding_dim, embedding_matrix)
 
@@ -224,6 +233,7 @@ if train_clicked:
 
     st.session_state.model = model
     st.session_state.tokenizer = tokenizer
+    st.caption(f"Trained with embedding model: {used_model} | dim={embedding_dim} | OOV (within cap)={not_found}")
 
 st.subheader("Try a review")
 user_text = st.text_area("Enter a movie review:", height=150, placeholder="Type a review and click Predict...")
