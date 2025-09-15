@@ -1,4 +1,5 @@
 # IMDb Sentiment Analysis with Word2Vec + GRU
+# Update to restore this code
 
 This project performs sentiment analysis on the IMDb dataset using pre-trained Word2Vec embeddings and a GRU neural network. The code has been refined to automatically download Word2Vec vectors from gensim's model hub instead of requiring local files.
 
